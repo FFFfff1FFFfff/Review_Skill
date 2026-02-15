@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Send Review Request - Review Boost</title>
+    <link href="https://fonts.googleapis.com/css2?family=Anton&display=swap" rel="stylesheet">
+    <link href="https://api.fontshare.com/v2/css?f[]=satoshi@400;500;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            charcoal: '#171e19',
+            golden: '#ffe17c',
+            sage: '#b7c6c2',
+            dark: '#272727',
+          },
+          fontFamily: {
+            anton: ['Anton', 'sans-serif'],
+            satoshi: ['Satoshi', 'sans-serif'],
+          },
+        }
+      }
+    }
+    </script>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="bg-white grid-bg min-h-screen font-satoshi text-charcoal">
+    <nav class="bg-charcoal">
+        <div class="max-w-3xl mx-auto px-4 py-3 flex items-center">
+            <span class="font-bold text-sage">ReviewBoost</span>
+            <div class="ml-auto flex gap-6">
+                <a href="/portal/send" class="text-sm text-sage hover:text-golden">Send</a>
+                <a href="/portal/dashboard" class="text-sm text-sage hover:text-golden">Dashboard</a>
+            </div>
+        </div>
+    </nav>
+    <main class="max-w-3xl mx-auto px-4 py-8">
+        <h1 class="text-3xl font-anton uppercase leading-[0.9] mb-6">Send Review Request</h1>
+
+        <div id="alert" class="hidden rounded p-3 mb-6 text-sm"></div>
+
+        <!-- Step 1: Input form -->
+        <form id="send-form" class="bg-white rounded-lg shadow p-6 space-y-4 card border border-charcoal/10">
+            <div>
+                <label class="block text-sm font-medium text-charcoal mb-1">Google Maps Link or Business Name</label>
+                <div class="flex gap-2">
+                    <input type="text" id="google-link" required
+                           class="flex-1 border border-charcoal/10 rounded px-3 py-2 text-sm focus:ring-golden focus:border-golden"
+                           placeholder="Paste a Google Maps link or type business name...">
+                    <button type="button" onclick="lookupPlace()"
+                            class="bg-charcoal/10 text-charcoal px-3 py-2 rounded text-sm hover:bg-charcoal/20 whitespace-nowrap">
+                        Lookup
+                    </button>
+                </div>
+                <div id="place-info" class="mt-2 text-sm text-green-700 hidden">
+                    <span id="place-name" class="font-medium"></span>
+                    <span id="place-id" class="text-xs text-dark/40 ml-2 font-mono"></span>
+                </div>
+                <div id="place-error" class="mt-2 text-sm text-red-600 hidden"></div>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-charcoal mb-1">Phone Numbers</label>
+                <div id="phones-list">
+                    <div class="flex gap-2 mb-2">
+                        <input type="tel" class="phone-input flex-1 border border-charcoal/10 rounded px-3 py-2 text-sm focus:ring-golden focus:border-golden"
+                               placeholder="e.g. +14155551234" required>
+                        <button type="button" onclick="addPhone()" class="text-golden text-sm hover:underline font-medium">+ Add</button>
+                    </div>
+                </div>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-charcoal mb-1">
+                    Phone Carrier <span class="text-dark/40 font-normal">(optional, for email-gateway fallback)</span>
+                </label>
+                <select id="carrier"
+                        class="w-full border border-charcoal/10 rounded px-3 py-2 text-sm focus:ring-golden focus:border-golden">
+                    <option value="">-- Not needed if Twilio is set up --</option>
+                </select>
+            </div>
+            <button type="submit" id="generate-btn"
+                    class="bg-golden text-charcoal px-4 py-2 rounded text-sm hover:bg-golden/90 font-medium">
+                Generate Reviews
+            </button>
+        </form>
+
+        <!-- Step 2: Preview & Edit -->
+        <div id="preview-section" class="hidden mt-6">
+            <div class="bg-white rounded-lg shadow p-6 card border border-charcoal/10">
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-lg font-semibold">Preview Reviews</h2>
+                    <span id="preview-biz" class="text-sm text-dark/50"></span>
+                </div>
+                <div id="preview-reviews" class="space-y-4"></div>
+                <div class="flex gap-3 mt-6 pt-4 border-t border-charcoal/10">
+                    <button type="button" onclick="backToEdit()"
+                            class="bg-charcoal/10 text-charcoal px-4 py-2 rounded text-sm hover:bg-charcoal/20 font-medium">
+                        Back
+                    </button>
+                    <button type="button" id="send-btn" onclick="sendReviews()"
+                            class="bg-golden text-charcoal px-4 py-2 rounded text-sm hover:bg-golden/90 font-medium">
+                        Send SMS
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div id="biz-section" class="mt-8 hidden">
+            <h2 class="text-lg font-semibold mb-3">Recent Businesses</h2>
+            <div class="bg-white rounded-lg shadow overflow-hidden border border-charcoal/10">
+                <table class="w-full text-sm">
+                    <thead class="bg-charcoal/5">
+                        <tr>
+                            <th class="text-left px-4 py-2">Name</th>
+                            <th class="text-left px-4 py-2">Place ID</th>
+                        </tr>
+                    </thead>
+                    <tbody id="biz-tbody"></tbody>
+                </table>
+            </div>
+        </div>
+    </main>
+
+<script>
+// State for the two-step flow
+let generatedData = null;
+
+function showAlert(type, msg) {
+    const el = document.getElementById('alert');
+    el.className = type === 'ok'
+        ? 'rounded p-3 mb-6 text-sm bg-green-50 border border-green-200 text-green-800'
+        : 'rounded p-3 mb-6 text-sm bg-red-50 border border-red-200 text-red-800';
+    el.textContent = msg;
+    el.classList.remove('hidden');
+}
+
+function hideAlert() {
+    document.getElementById('alert').classList.add('hidden');
+}
+
+function addPhone() {
+    const div = document.createElement('div');
+    div.className = 'flex gap-2 mb-2';
+    div.innerHTML = `
+        <input type="tel" class="phone-input flex-1 border border-charcoal/10 rounded px-3 py-2 text-sm focus:ring-golden focus:border-golden"
+               placeholder="e.g. +14155551234">
+        <button type="button" onclick="this.parentElement.remove()" class="text-red-500 text-sm hover:underline">Remove</button>`;
+    document.getElementById('phones-list').appendChild(div);
+}
+
+async function lookupPlace() {
+    const url = document.getElementById('google-link').value.trim();
+    if (!url) return;
+    const info = document.getElementById('place-info');
+    const error = document.getElementById('place-error');
+    info.classList.add('hidden');
+    error.classList.add('hidden');
+    try {
+        const resp = await fetch(`/api/resolve-place?url=${encodeURIComponent(url)}`);
+        const data = await resp.json();
+        if (resp.ok) {
+            document.getElementById('place-name').textContent = data.name;
+            document.getElementById('place-id').textContent = data.place_id;
+            info.classList.remove('hidden');
+        } else {
+            error.textContent = data.error || 'Could not resolve place.';
+            error.classList.remove('hidden');
+        }
+    } catch (e) {
+        error.textContent = 'Network error. Please try again.';
+        error.classList.remove('hidden');
+    }
+}
+
+async function loadBusinesses() {
+    try {
+        const resp = await fetch('/api/businesses');
+        const list = await resp.json();
+        if (!list.length) return;
+        const tbody = document.getElementById('biz-tbody');
+        tbody.innerHTML = list.map(b =>
+            `<tr class="border-t border-charcoal/10">
+                <td class="px-4 py-2 font-medium">${b.name}</td>
+                <td class="px-4 py-2 text-dark/50 font-mono text-xs">${b.google_place_id}</td>
+            </tr>`
+        ).join('');
+        document.getElementById('biz-section').classList.remove('hidden');
+    } catch (e) { /* ignore */ }
+}
+
+// Step 1: Generate reviews
+document.getElementById('send-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    hideAlert();
+
+    const btn = document.getElementById('generate-btn');
+    btn.disabled = true;
+    btn.textContent = 'Generating...';
+
+    const phones = [...document.querySelectorAll('.phone-input')]
+        .map(el => el.value.trim())
+        .filter(Boolean);
+
+    try {
+        const resp = await fetch('/api/generate', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                google_link: document.getElementById('google-link').value,
+                phones: phones,
+            }),
+        });
+        const data = await resp.json();
+        if (resp.ok) {
+            generatedData = data;
+            showPreview(data);
+        } else {
+            showAlert('error', data.error || 'Failed to generate reviews.');
+        }
+    } catch (e) {
+        showAlert('error', 'Network error. Please try again.');
+    }
+    btn.disabled = false;
+    btn.textContent = 'Generate Reviews';
+});
+
+function showPreview(data) {
+    document.getElementById('send-form').classList.add('hidden');
+    document.getElementById('preview-biz').textContent = data.business_name;
+
+    const container = document.getElementById('preview-reviews');
+    container.innerHTML = data.reviews.map((r, i) => `
+        <div class="border border-charcoal/10 rounded p-4 space-y-3">
+            <div class="text-sm font-medium text-dark/50">${r.phone}</div>
+            <div>
+                <label class="block text-xs font-medium text-dark/40 mb-1">SMS Message (sent to customer)</label>
+                <textarea id="sms-body-${i}" rows="2"
+                          class="w-full border border-charcoal/10 rounded px-3 py-2 text-sm focus:ring-golden focus:border-golden resize-y"
+                >${r.sms_body}</textarea>
+            </div>
+            <div>
+                <label class="block text-xs font-medium text-dark/40 mb-1">Review Content (copied to clipboard for customer)</label>
+                <textarea id="review-text-${i}" rows="3"
+                          class="w-full border border-charcoal/10 rounded px-3 py-2 text-sm focus:ring-golden focus:border-golden resize-y"
+                >${r.review_text}</textarea>
+            </div>
+        </div>
+    `).join('');
+
+    document.getElementById('preview-section').classList.remove('hidden');
+}
+
+function backToEdit() {
+    document.getElementById('preview-section').classList.add('hidden');
+    document.getElementById('send-form').classList.remove('hidden');
+    generatedData = null;
+}
+
+// Step 2: Send with edited reviews
+async function sendReviews() {
+    hideAlert();
+
+    const btn = document.getElementById('send-btn');
+    btn.disabled = true;
+    btn.textContent = 'Sending...';
+
+    // Collect edited content
+    const reviews = generatedData.reviews.map((r, i) => ({
+        id: r.id,
+        sms_body: document.getElementById(`sms-body-${i}`).value,
+        review_text: document.getElementById(`review-text-${i}`).value,
+    }));
+
+    try {
+        const resp = await fetch('/api/send', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                reviews: reviews,
+                carrier: document.getElementById('carrier').value,
+            }),
+        });
+        const data = await resp.json();
+        if (resp.ok) {
+            let msg = '';
+            if (data.sent.length) msg += `SMS sent to ${data.sent.join(', ')}.`;
+            if (data.failed.length) msg += ` Failed: ${data.failed.join(', ')}.`;
+            if (data.errors && data.errors.length) msg += `\nErrors: ${data.errors.join('; ')}`;
+            showAlert(data.sent.length ? 'ok' : 'error', msg);
+
+            // Reset to form view
+            document.getElementById('preview-section').classList.add('hidden');
+            document.getElementById('send-form').classList.remove('hidden');
+            generatedData = null;
+            loadBusinesses();
+        } else {
+            showAlert('error', data.error || 'Something went wrong.');
+        }
+    } catch (e) {
+        showAlert('error', 'Network error. Please try again.');
+    }
+    btn.disabled = false;
+    btn.textContent = 'Send SMS';
+}
+
+async function loadCarriers() {
+    try {
+        const resp = await fetch('/api/carriers');
+        const list = await resp.json();
+        const select = document.getElementById('carrier');
+        list.forEach(c => {
+            const opt = document.createElement('option');
+            opt.value = c.value;
+            opt.textContent = c.label;
+            select.appendChild(opt);
+        });
+    } catch (e) { /* ignore */ }
+}
+
+loadCarriers();
+loadBusinesses();
+</script>
+</body>
+</html>
